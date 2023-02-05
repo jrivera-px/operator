@@ -1,16 +1,21 @@
 package preflight
 
 import (
+	"context"
+	"crypto/md5"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/opsworks"
 	"github.com/pborman/uuid"
 	"github.com/sirupsen/logrus"
+	v1 "k8s.io/api/core/v1"
 
 	"github.com/libopenstorage/cloudops"
 	awsops "github.com/libopenstorage/cloudops/aws"
+	pxutil "github.com/libopenstorage/operator/drivers/storage/portworx/util"
 	corev1 "github.com/libopenstorage/operator/pkg/apis/core/v1"
 )
 
@@ -22,6 +27,9 @@ const (
 
 	// dryRunErrMsg dry run error response if succeeded, otherwise will be UnauthorizedOperation
 	dryRunErrMsg = "DryRunOperation"
+
+	awsAccessKeyEnvName = "AWS_ACCESS_KEY_ID"
+	awsSecretKeyEnvName = "AWS_SECRET_ACCESS_KEY"
 )
 
 var (
@@ -30,18 +38,26 @@ var (
 
 type aws struct {
 	checker
-	ops  cloudops.Ops
-	zone string
+	ops            cloudops.Ops
+	zone           string
+	credentialHash string
 }
 
-func (a *aws) initCloudOps() error {
+func (a *aws) initCloudOps(cluster *corev1.StorageCluster) error {
+	// Set env vars for user provided credentials: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+	// only set env vars when client init is needed
+	if err := a.setAWSCredentialEnvVars(cluster); err != nil {
+		unsetAWSCredentialEnvVars()
+		return err
+	}
+
 	if a.ops != nil {
 		return nil
 	}
 
 	// Initialize aws client for cloud drive permission checks
-	// TODO: use provided credentials to create a client
 	client, err := awsops.NewClient()
+	unsetAWSCredentialEnvVars()
 	if err != nil {
 		return err
 	}
@@ -53,6 +69,76 @@ func (a *aws) initCloudOps() error {
 	}
 	a.zone = instance.Zone
 	return nil
+}
+
+// setAWSCredentialEnvVars sets credential env vars to init aws client if provided in StorageCluster
+// env vars are only set if client creation is needed:
+// 1. they are provided but client is not created yet
+// 2. they got updated
+func (a *aws) setAWSCredentialEnvVars(cluster *corev1.StorageCluster) error {
+	// Check if user provided credentials exist
+	var accessKeyEnv, secretKeyEnv *v1.EnvVar
+	for _, env := range cluster.Spec.Env {
+		if env.Name == awsAccessKeyEnvName {
+			accessKeyEnv = env.DeepCopy()
+		} else if env.Name == awsSecretKeyEnvName {
+			secretKeyEnv = env.DeepCopy()
+		}
+	}
+	if accessKeyEnv == nil && secretKeyEnv == nil {
+		// No credential provided or credentials are removed
+		logrus.Debugf("no aws credentials provided, will use instance privileges instead")
+		if a.credentialHash != "" {
+			a.credentialHash = ""
+			a.ops = nil
+			unsetAWSCredentialEnvVars()
+		}
+		return nil
+	} else if accessKeyEnv == nil || secretKeyEnv == nil {
+		return fmt.Errorf("both AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY need to be provided")
+	}
+
+	// Get the credentials from secrets or values
+	accessKey, err := pxutil.GetValueFromEnvVar(context.TODO(), a.k8sClient, accessKeyEnv, cluster.Namespace)
+	if err != nil {
+		return err
+	}
+	secretKey, err := pxutil.GetValueFromEnvVar(context.TODO(), a.k8sClient, secretKeyEnv, cluster.Namespace)
+	if err != nil {
+		return err
+	}
+	if accessKey == "" || secretKey == "" {
+		return fmt.Errorf("both AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY need to be provided")
+	}
+
+	// Check whether to set the env vars for aws client creation
+	credentialHash := fmt.Sprintf("%x", md5.Sum([]byte(accessKey+secretKey)))
+	if a.ops != nil &&
+		a.credentialHash == credentialHash {
+		return nil
+	}
+
+	// Client init required, set environment variables using credentials above
+	if err := os.Setenv(awsAccessKeyEnvName, accessKey); err != nil {
+		return err
+	}
+	if err := os.Setenv(awsSecretKeyEnvName, secretKey); err != nil {
+		return err
+	}
+	a.credentialHash = credentialHash
+	a.ops = nil
+
+	logrus.Infof("environment variables set using AWS credentials provided")
+	return nil
+}
+
+func unsetAWSCredentialEnvVars() {
+	if err := os.Unsetenv(awsAccessKeyEnvName); err != nil {
+		logrus.WithError(err).Warningf("failed to reset env var %s", awsAccessKeyEnvName)
+	}
+	if err := os.Unsetenv(awsSecretKeyEnvName); err != nil {
+		logrus.WithError(err).Warningf("failed to reset env var %s", awsSecretKeyEnvName)
+	}
 }
 
 func (a *aws) getEC2VolumeTemplate() *ec2.Volume {
@@ -67,7 +153,7 @@ func (a *aws) getEC2VolumeTemplate() *ec2.Volume {
 
 func (a *aws) CheckCloudDrivePermission(cluster *corev1.StorageCluster) error {
 	// Only init the aws client when needed
-	if err := a.initCloudOps(); err != nil {
+	if err := a.initCloudOps(cluster); err != nil {
 		return err
 	}
 	// check the permission here by doing dummy drive operations
