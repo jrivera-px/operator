@@ -108,6 +108,10 @@ func (c *Controller) Reconcile(ctx context.Context, request reconcile.Request) (
 	}
 
 	if err := c.syncStorageNode(storagenode); err != nil {
+		if strings.Contains(err.Error(), k8s.UpdateRevisionConflictErr) {
+			logrus.Warnf("failed to sync StorageNode %s/%s: %v", storagenode.Namespace, storagenode.Name, err)
+			return reconcile.Result{}, nil
+		}
 		k8s.WarningEvent(c.recorder, storagenode, util.FailedSyncReason, err.Error())
 		return reconcile.Result{}, err
 	}
@@ -372,6 +376,7 @@ func (c *Controller) syncStorage(
 			}
 
 			if updateNeeded {
+				// TODO: get latest pod to update
 				if err := c.client.Update(context.TODO(), podCopy); err != nil {
 					return err
 				}

@@ -53,7 +53,7 @@ const (
 	// TelemetryArcusLocationFilename is name of the file storing the location of arcus endpoint to use
 	TelemetryArcusLocationFilename = "location"
 	// TelemetryCertName is name of the telemetry cert.
-	TelemetryCertName = "pure-telemetry-certs"
+	TelemetryCertName = pxutil.TelemetryCertName
 
 	defaultCollectorMemoryRequest = "64Mi"
 	defaultCollectorMemoryLimit   = "128Mi"
@@ -735,7 +735,7 @@ func (t *telemetry) reconcileCCMJavaProxyConfigMap(
 	cluster *corev1.StorageCluster,
 	ownerRef *metav1.OwnerReference,
 ) error {
-	proxy := pxutil.GetPxProxyEnvVarValue(cluster)
+	_, proxy := pxutil.GetPxProxyEnvVarValue(cluster)
 	// Delete the existing config map if portworx proxy is empty
 	if proxy == "" {
 		return k8sutil.DeleteConfigMap(t.k8sClient, TelemetryCCMProxyConfigMapName, cluster.Namespace, *ownerRef)

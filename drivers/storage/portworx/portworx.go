@@ -877,9 +877,8 @@ func SetPortworxDefaults(toUpdate *corev1.StorageCluster, k8sVersion *version.Ve
 		return err
 	}
 
-	if pxutil.IsTelemetryEnabled(toUpdate.Spec) && t.pxVersion.LessThan(pxutil.MinimumPxVersionCCM) {
-		toUpdate.Spec.Monitoring.Telemetry.Enabled = false // telemetry not supported for < 2.8
-		toUpdate.Spec.Monitoring.Telemetry.Image = ""
+	if err := setTelemetryDefaults(toUpdate, t.pxVersion); err != nil {
+		return err
 	}
 
 	setSecuritySpecDefaults(toUpdate)
@@ -1285,6 +1284,51 @@ func setTLSDefaults(
 			*listOp.list = newEnv
 		}
 	}
+}
+
+func setTelemetryDefaults(
+	toUpdate *corev1.StorageCluster,
+	pxVersion *version.Version,
+) error {
+	// Check if telemetry is enabled correctly, disable it if not
+	if err := pxutil.ValidateTelemetry(toUpdate); err != nil {
+		toUpdate.Spec.Monitoring.Telemetry.Enabled = false
+		toUpdate.Spec.Monitoring.Telemetry.Image = ""
+		toUpdate.Spec.Monitoring.Telemetry.LogUploaderImage = ""
+		logrus.Warnf("telemetry is disabled: %v", err)
+		return nil
+	}
+
+	// Only enable telemetry by default under conditions:
+	// 1. CCM Go is supported
+	// 2. telemetry is not specified explicitly
+	// 3. Portworx initialized (cluster UUID ready)
+	// 4. no air-gapped or custom proxy
+	// TODO: pwx-29521 uuid is checked here to avoid unit tests sending requests to arcus endpoint
+	if !pxutil.IsCCMGoSupported(pxVersion) ||
+		(toUpdate.Spec.Monitoring != nil && toUpdate.Spec.Monitoring.Telemetry != nil) ||
+		toUpdate.Status.ClusterUID == "" {
+		return nil
+	}
+	if _, proxy := pxutil.GetPxProxyEnvVarValue(toUpdate); proxy != "" {
+		// Don't enable telemetry if either of http or https proxy is specified
+		return nil
+	}
+	canAccess, err := component.CanAccessArcusRegisterEndpoint(toUpdate)
+	if err != nil || !canAccess {
+		return err
+	}
+
+	if toUpdate.Spec.Monitoring == nil {
+		toUpdate.Spec.Monitoring = &corev1.MonitoringSpec{}
+	}
+	if toUpdate.Spec.Monitoring.Telemetry == nil {
+		toUpdate.Spec.Monitoring.Telemetry = &corev1.TelemetrySpec{
+			Enabled: true,
+		}
+	}
+	logrus.Infof("telemetry is enabled by default")
+	return nil
 }
 
 func removeDeprecatedFields(

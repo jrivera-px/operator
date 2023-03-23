@@ -28,7 +28,7 @@ ifndef DOCKER_HUB_REGISTRY_IMG
     $(warning DOCKER_HUB_REGISTRY_IMG not defined, using '$(DOCKER_HUB_REGISTRY_IMG)' instead)
 endif
 ifndef BASE_REGISTRY_IMG
-    BASE_REGISTRY_IMG := docker.io/portworx/px-operator-registry:1.10.2
+    BASE_REGISTRY_IMG := docker.io/portworx/px-operator-registry:23.3.0
     $(warning BASE_REGISTRY_IMG not defined, using '$(BASE_REGISTRY_IMG)' instead)
 endif
 
@@ -56,7 +56,7 @@ ifeq ($(BUILD_TYPE),debug)
 BUILDFLAGS += -gcflags "-N -l"
 endif
 
-RELEASE_VER := 2.0.0
+RELEASE_VER := 99.9.9
 BASE_DIR    := $(shell git rev-parse --show-toplevel)
 GIT_SHA     := $(shell git rev-parse --short HEAD)
 BIN         := $(BASE_DIR)/bin
@@ -102,7 +102,7 @@ $(GOPATH)/bin/mockgen:
 	env GOFLAGS="" go install github.com/golang/mock/mockgen@latest
 
 $(GOPATH)/bin/golangci-lint:
-	env GOFLAGS="" go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	env GOFLAGS="" go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.51.0
 
 $(GOPATH)/bin/errcheck:
 	env GOFLAGS="" go install github.com/kisielk/errcheck@latest
@@ -179,7 +179,7 @@ container:
 	@echo "Building operator image $(OPERATOR_IMG)"
 	docker build --pull --tag $(OPERATOR_IMG) -f build/Dockerfile .
 
-DOCK_BUILD_CNT	:= golang:1.19.1
+DOCK_BUILD_CNT	:= golang:1.19
 
 docker-build:
 	@echo "Building using docker"

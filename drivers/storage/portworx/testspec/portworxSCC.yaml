@@ -17,7 +17,6 @@ kind: SecurityContextConstraints
 metadata:
   name: portworx
   resourceVersion: "1"
-priority: 2
 readOnlyRootFilesystem: false
 requiredDropCapabilities: null
 runAsUser:
@@ -35,5 +34,6 @@ users:
 - system:serviceaccount:kube-test:portworx-pvc-controller
 - system:serviceaccount:kube-test:px-metrics-collector
 - system:serviceaccount:kube-test:px-node-wiper
+- system:serviceaccount:kube-test:px-prometheus
 volumes:
 - '*'

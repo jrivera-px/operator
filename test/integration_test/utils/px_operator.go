@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	pxOperatorMasterVersion  = "9.9.9.9"
+	pxOperatorMasterVersion  = "99.9.9"
 	pxOperatorDeploymentName = "portworx-operator"
 )
 
@@ -26,6 +26,8 @@ var (
 	PxOperatorVer1_8, _ = version.NewVersion("1.8-")
 	// PxOperatorVer1_8_1 portworx-operator 1.8.1 minimum version
 	PxOperatorVer1_8_1, _ = version.NewVersion("1.8.1-")
+	// PxOperatorVer23_3 portworx-operator 23.3 minimum version
+	PxOperatorVer23_3, _ = version.NewVersion("23.3-")
 )
 
 // TODO: Install portworx-operator in test automation
@@ -65,13 +67,26 @@ func getPXOperatorImageTag() (string, error) {
 			if strings.Contains(container.Image, "registry.connect.redhat.com") { // PX Operator deployed via Openshift Marketplace will have "registry.connect.redhat.com" as part of image
 				for _, env := range container.Env {
 					if env.Name == "OPERATOR_CONDITION_NAME" {
-						logrus.Infof("Looks like portworx-operator was installed via Openshift Marketplace, image [%s]", container.Image)
+						logrus.Debugf("Found Env var [OPERATOR_CONDITION_NAME=%s] in the portworx-operator deployment", env.Value)
 						tag = strings.Split(env.Value, ".v")[1]
+						logrus.Infof("Looks like portworx-operator was installed via Openshift Marketplace, image [%s], using tag from Env var [%s]", container.Image, tag)
 						return tag, nil
 					}
 				}
 			} else {
-				logrus.Infof("Get portworx-operator image installed [%s]", container.Image)
+				var isMarketplaceDeployment bool
+				for _, env := range container.Env {
+					if env.Name == "OPERATOR_CONDITION_NAME" {
+						logrus.Debugf("Found Env var [OPERATOR_CONDITION_NAME=%s] in the portworx-operator deployment", env.Value)
+						isMarketplaceDeployment = true
+					}
+				}
+				if isMarketplaceDeployment && strings.Contains(container.Image, "-dev") {
+					logrus.Infof("Looks like portworx-operator was installed via Openshift Marketplace, with unreleased image [%s]", container.Image)
+					tag = strings.Split(container.Image, ":")[1]
+					return tag, nil
+				}
+				logrus.Infof("Looks like portworx-operator was not installed via Openshift Marketplace, will use tag from the container image [%s]", container.Image)
 				tag = strings.Split(container.Image, ":")[1]
 				return tag, nil
 			}
@@ -157,10 +172,10 @@ func ValidatePxOperatorDeploymentAndVersion(expectedOpVersion, namespace string)
 		}
 
 		if opVersion != expectedOpVersion {
-			return nil, true, fmt.Errorf("failed to validate PX Operator version, Expected version: %s, actual version: %s", expectedOpVersion, opVersion)
+			return nil, true, fmt.Errorf("failed to validate PX Operator version, Expected version: [%s], actual version: [%s]", expectedOpVersion, opVersion)
 		}
 
-		logrus.Infof("Successfuly validated PX Operator deployment and version [%s]", opVersion)
+		logrus.Infof("Successfuly validated PX Operator deployment and version, Expected version: [%s], actual version: [%s]", expectedOpVersion, opVersion)
 		return nil, false, nil
 	}
 

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -673,7 +674,7 @@ func TestPortworxAPIDaemonSetAlwaysDeploys(t *testing.T) {
 	ds = &appsv1.DaemonSet{}
 	err = testutil.Get(k8sClient, ds, component.PxAPIDaemonSetName, cluster.Namespace)
 	require.NoError(t, err)
-	require.Equal(t, "k8s.gcr.io/pause:3.1", ds.Spec.Template.Spec.Containers[0].Image)
+	require.Equal(t, "registry.k8s.io/pause:3.1", ds.Spec.Template.Spec.Containers[0].Image)
 
 	// Case: If the daemon set was marked as deleted, the it should be recreated,
 	// even if it is already present
@@ -1575,10 +1576,10 @@ func TestPVCControllerInstallWithK8s1_24(t *testing.T) {
 		},
 	}
 
-	expectedDeployment := testutil.GetExpectedDeployment(t, "pvcControllerDeployment_k8s_1.24.yaml")
+	expectedDeployment := testutil.GetExpectedDeployment(t, "pvcControllerDeployment.yaml")
 	expectedContainer := expectedDeployment.Spec.Template.Spec.Containers[0]
 	expectedContainer.Command = expectedContainer.Command[0:6]
-	expectedContainer.Image = "k8s.gcr.io/kube-controller-manager-amd64:v1.24.0"
+	expectedContainer.Image = "registry.k8s.io/kube-controller-manager-amd64:v1.24.0"
 	expectedContainer.LivenessProbe.HTTPGet.Port = intstr.FromInt(10257)
 	expectedContainer.LivenessProbe.HTTPGet.Scheme = v1.URISchemeHTTPS
 	expectedDeployment.Spec.Template.Spec.Containers[0] = expectedContainer
@@ -1615,8 +1616,8 @@ func TestPVCControllerInstallWithK8s1_22(t *testing.T) {
 	// TestCase: Simple install on k8s 1.22
 	expectedDeployment := testutil.GetExpectedDeployment(t, "pvcControllerDeployment.yaml")
 	expectedContainer := expectedDeployment.Spec.Template.Spec.Containers[0]
-	expectedContainer.Command = expectedContainer.Command[0:5]
-	expectedContainer.Image = "k8s.gcr.io/kube-controller-manager-amd64:v1.22.0"
+	expectedContainer.Command = expectedContainer.Command[0:6]
+	expectedContainer.Image = "registry.k8s.io/kube-controller-manager-amd64:v1.22.0"
 	expectedContainer.LivenessProbe.HTTPGet.Port = intstr.FromInt(10257)
 	expectedContainer.LivenessProbe.HTTPGet.Scheme = v1.URISchemeHTTPS
 	expectedDeployment.Spec.Template.Spec.Containers[0] = expectedContainer
@@ -1641,7 +1642,7 @@ func TestPVCControllerInstallWithK8s1_22(t *testing.T) {
 		pxutil.AnnotationIsAKS: "true",
 	}
 	expectedContainer = expectedDeployment.Spec.Template.Spec.Containers[0]
-	expectedContainer.Command[5] = "--secure-port=10261"
+	expectedContainer.Command[6] = "--secure-port=10261"
 	expectedContainer.LivenessProbe.HTTPGet.Port = intstr.FromInt(10261)
 	expectedDeployment.Spec.Template.Spec.Containers[0] = expectedContainer
 	err = driver.PreInstall(cluster)
@@ -1785,32 +1786,6 @@ func TestPVCControllerInstallInNonKubeSystemNamespace(t *testing.T) {
 	deployment = &appsv1.Deployment{}
 	err = testutil.Get(k8sClient, deployment, component.PVCDeploymentName, cluster.Namespace)
 	require.NoError(t, err)
-}
-
-func TestPVCControllerInstallForOpenshift(t *testing.T) {
-	coreops.SetInstance(coreops.New(fakek8sclient.NewSimpleClientset()))
-	reregisterComponents()
-	k8sClient := testutil.FakeK8sClient()
-	driver := portworx{}
-	err := driver.Init(k8sClient, runtime.NewScheme(), record.NewFakeRecorder(0))
-	require.NoError(t, err)
-
-	cluster := &corev1.StorageCluster{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "px-cluster",
-			Namespace: "kube-system",
-			Annotations: map[string]string{
-				pxutil.AnnotationPVCController: "true",
-				pxutil.AnnotationIsOpenshift:   "true",
-			},
-		},
-	}
-
-	err = driver.PreInstall(cluster)
-	require.NoError(t, err)
-
-	verifyPVCControllerInstall(t, cluster, k8sClient)
-	verifyPVCControllerDeployment(t, cluster, k8sClient, "pvcControllerDeploymentOpenshift.yaml")
 }
 
 func TestPVCControllerInstallForPKS(t *testing.T) {
@@ -2382,7 +2357,7 @@ func TestPVCControllerImageWithNewerK8sVersion(t *testing.T) {
 	err = testutil.Get(k8sClient, deployment, component.PVCDeploymentName, cluster.Namespace)
 	require.NoError(t, err)
 	require.Equal(t,
-		"k8s.gcr.io/kube-controller-manager-amd64:v1.18.7",
+		"registry.k8s.io/kube-controller-manager-amd64:v1.18.7",
 		deployment.Spec.Template.Spec.Containers[0].Image,
 	)
 
@@ -2419,7 +2394,7 @@ func TestPVCControllerImageWithNewerK8sVersion(t *testing.T) {
 	err = testutil.Get(k8sClient, deployment, component.PVCDeploymentName, cluster.Namespace)
 	require.NoError(t, err)
 	require.Equal(t,
-		"k8s.gcr.io/kube-controller-manager-amd64:v1.17.10",
+		"registry.k8s.io/kube-controller-manager-amd64:v1.17.10",
 		deployment.Spec.Template.Spec.Containers[0].Image,
 	)
 
@@ -2455,7 +2430,7 @@ func TestPVCControllerImageWithNewerK8sVersion(t *testing.T) {
 	err = testutil.Get(k8sClient, deployment, component.PVCDeploymentName, cluster.Namespace)
 	require.NoError(t, err)
 	require.Equal(t,
-		"k8s.gcr.io/kube-controller-manager-amd64:v1.16.14",
+		"registry.k8s.io/kube-controller-manager-amd64:v1.16.14",
 		deployment.Spec.Template.Spec.Containers[0].Image,
 	)
 
@@ -3114,14 +3089,21 @@ func TestLighthouseSidecarsOverrideWithEnv(t *testing.T) {
 }
 
 func TestAutopilotInstall(t *testing.T) {
-	coreops.SetInstance(coreops.New(fakek8sclient.NewSimpleClientset()))
+	// Start test with newer version (1.25 beyond) of Kubernetes first, on which PodSecurityPolicy is no longer existing
+	versionClient := fakek8sclient.NewSimpleClientset()
+	coreops.SetInstance(coreops.New(versionClient))
+	versionClient.Discovery().(*fakediscovery.FakeDiscovery).FakedServerVersion = &version.Info{
+		GitVersion: "v1.25.0",
+	}
+	fakeExtClient := fakeextclient.NewSimpleClientset()
+	apiextensionsops.SetInstance(apiextensionsops.New(fakeExtClient))
 	reregisterComponents()
 	k8sClient := testutil.FakeK8sClient()
 	driver := portworx{}
 	err := driver.Init(k8sClient, runtime.NewScheme(), record.NewFakeRecorder(0))
 	require.NoError(t, err)
 
-	cluster := &corev1.StorageCluster{
+	stcSpec := &corev1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "px-cluster",
 			Namespace: "kube-test",
@@ -3181,6 +3163,8 @@ func TestAutopilotInstall(t *testing.T) {
 		},
 	}
 
+	cluster := stcSpec.DeepCopy()
+
 	err = driver.SetDefaultsOnStorageCluster(cluster)
 	require.NoError(t, err)
 
@@ -3234,6 +3218,39 @@ func TestAutopilotInstall(t *testing.T) {
 
 	autopilotDeployment.ResourceVersion = ""
 	require.Equal(t, expectedDeployment, autopilotDeployment)
+	// Till here we finished the verification of all aspects of Autopilot
+
+	// Now test with older version (1.24 less) of Kubernetes, on which PodSecurityPolicy is used and
+	// injected into Autopilot's ClusterRole definition
+	versionClient = fakek8sclient.NewSimpleClientset()
+	coreops.SetInstance(coreops.New(versionClient))
+	versionClient.Discovery().(*fakediscovery.FakeDiscovery).FakedServerVersion = &version.Info{
+		GitVersion: "v1.24.0",
+	}
+	fakeExtClient = fakeextclient.NewSimpleClientset()
+	apiextensionsops.SetInstance(apiextensionsops.New(fakeExtClient))
+	reregisterComponents()
+	k8sClient = testutil.FakeK8sClient()
+	driver = portworx{}
+	err = driver.Init(k8sClient, runtime.NewScheme(), record.NewFakeRecorder(0))
+	require.NoError(t, err)
+
+	cluster = stcSpec.DeepCopy()
+
+	err = driver.SetDefaultsOnStorageCluster(cluster)
+	require.NoError(t, err)
+
+	err = driver.PreInstall(cluster)
+	require.NoError(t, err)
+
+	// Load Autopilot ClusterRole with PSP rules and compare
+	expectedCR = testutil.GetExpectedClusterRole(t, "autopilotClusterRole_k8s_1.24.yaml")
+	actualCR = &rbacv1.ClusterRole{}
+	err = testutil.Get(k8sClient, actualCR, component.AutopilotClusterRoleName, "")
+	require.NoError(t, err)
+	require.Equal(t, expectedCR.Name, actualCR.Name)
+	require.Empty(t, actualCR.OwnerReferences)
+	require.ElementsMatch(t, expectedCR.Rules, actualCR.Rules)
 }
 
 func TestAutopilotInstallIncorrectSpec(t *testing.T) {
@@ -4179,6 +4196,38 @@ func TestAutopilotInvalidCPU(t *testing.T) {
 		fmt.Sprintf("%v %v Failed to setup Autopilot.", v1.EventTypeWarning, util.FailedComponentReason))
 }
 
+func TestAutopilotSecurityContext(t *testing.T) {
+	coreops.SetInstance(coreops.New(fakek8sclient.NewSimpleClientset()))
+	reregisterComponents()
+	k8sClient := testutil.FakeK8sClient()
+	recorder := record.NewFakeRecorder(10)
+	driver := portworx{}
+	err := driver.Init(k8sClient, runtime.NewScheme(), recorder)
+	require.NoError(t, err)
+
+	cluster := &corev1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "px-cluster",
+			Namespace: "kube-test",
+		},
+		Spec: corev1.StorageClusterSpec{
+			Autopilot: &corev1.AutopilotSpec{
+				Enabled: true,
+				Image:   "portworx/autopilot:v1",
+			},
+		},
+	}
+
+	err = driver.PreInstall(cluster)
+	require.NoError(t, err)
+
+	autopilotDeployment := &appsv1.Deployment{}
+	err = testutil.Get(k8sClient, autopilotDeployment, component.AutopilotDeploymentName, cluster.Namespace)
+	require.NoError(t, err)
+	require.False(t, *autopilotDeployment.Spec.Template.Spec.Containers[0].SecurityContext.AllowPrivilegeEscalation)
+	require.False(t, *autopilotDeployment.Spec.Template.Spec.Containers[0].SecurityContext.Privileged)
+}
+
 func TestAutopilotVolumesChange(t *testing.T) {
 	versionClient := fakek8sclient.NewSimpleClientset()
 	coreops.SetInstance(coreops.New(versionClient))
@@ -4970,7 +5019,6 @@ func setupEtcHosts(t *testing.T, ip string, hostnames ...string) {
 
 	// update content
 	bb := bytes.NewBuffer(content)
-	bb.WriteRune('\n')
 	bb.WriteString(tempEtcHostsMarker)
 	bb.WriteRune('\n')
 	for _, hn := range hostnames {
@@ -4991,6 +5039,24 @@ func setupEtcHosts(t *testing.T, ip string, hostnames ...string) {
 	require.NoError(t, err)
 	assert.Equal(t, bb.Len(), n, "short write")
 	fd.Close()
+
+	// waiting for dns can be resolved
+	for i := 0; i < 60; i++ {
+		var ips []net.IP
+		ips, err = net.LookupIP(hostnames[0])
+		if err != nil || !strings.Contains(fmt.Sprintf("%v", ips), ip) {
+			logrus.WithFields(logrus.Fields{
+				"error": err,
+				"ips":   ips,
+				"ip":    ip,
+				"hosts": hostnames,
+			}).Warnf("failed to set /etc/hosts, retrying")
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		break
+	}
+	require.NoError(t, err)
 }
 
 func restoreEtcHosts(t *testing.T) {
@@ -7434,6 +7500,54 @@ func TestPrometheusInstall(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, prometheus.Spec.Resources.Requests, cluster.Spec.Monitoring.Prometheus.Resources.Requests)
 	require.Equal(t, prometheus.Spec.SecurityContext, cluster.Spec.Monitoring.Prometheus.SecurityContext)
+
+	// Modify replicas, retention, retentionSize, storage, volumes, volumeMounts
+	replicas := int32(2)
+	fakeSCName := "fake-test-sc"
+	cluster.Spec.Monitoring.Prometheus.Replicas = &replicas
+	cluster.Spec.Monitoring.Prometheus.Retention = "10h"
+	cluster.Spec.Monitoring.Prometheus.RetentionSize = "1048MB"
+	cluster.Spec.Monitoring.Prometheus.Storage = &monitoringv1.StorageSpec{
+		VolumeClaimTemplate: monitoringv1.EmbeddedPersistentVolumeClaim{
+			Spec: v1.PersistentVolumeClaimSpec{
+				StorageClassName: &fakeSCName,
+				Resources: v1.ResourceRequirements{
+					Requests: v1.ResourceList{
+						v1.ResourceStorage: resource.MustParse("1G"),
+					},
+				},
+			},
+		},
+	}
+	cluster.Spec.Monitoring.Prometheus.VolumeMounts = []v1.VolumeMount{
+		{
+			Name:      "testVlm",
+			MountPath: "/prometheus/",
+		},
+	}
+	cluster.Spec.Monitoring.Prometheus.Volumes = []v1.Volume{
+		{
+			Name: "testVlm",
+			VolumeSource: v1.VolumeSource{
+				PersistentVolumeClaim: &v1.PersistentVolumeClaimVolumeSource{
+					ClaimName: "testPxPvc",
+					ReadOnly:  false,
+				},
+			},
+		},
+	}
+	cluster.Spec.Monitoring.Prometheus.SecurityContext = nil
+	err = driver.PreInstall(cluster)
+	require.NoError(t, err)
+	prometheus = &monitoringv1.Prometheus{}
+	err = testutil.Get(k8sClient, prometheus, component.PrometheusInstanceName, cluster.Namespace)
+	require.NoError(t, err)
+	require.Equal(t, prometheus.Spec.Replicas, cluster.Spec.Monitoring.Prometheus.Replicas)
+	require.Equal(t, prometheus.Spec.Retention, cluster.Spec.Monitoring.Prometheus.Retention)
+	require.Equal(t, prometheus.Spec.RetentionSize, cluster.Spec.Monitoring.Prometheus.RetentionSize)
+	require.Equal(t, prometheus.Spec.Storage, cluster.Spec.Monitoring.Prometheus.Storage)
+	require.Equal(t, prometheus.Spec.VolumeMounts, cluster.Spec.Monitoring.Prometheus.VolumeMounts)
+	require.Equal(t, prometheus.Spec.Volumes, cluster.Spec.Monitoring.Prometheus.Volumes)
 }
 
 func TestCompleteInstallDuringMigration(t *testing.T) {
@@ -7778,7 +7892,7 @@ func TestCompleteInstallWithCustomRegistryChange(t *testing.T) {
 	err = testutil.Get(k8sClient, pxAPIDaemonSet, component.PxAPIDaemonSetName, cluster.Namespace)
 	require.NoError(t, err)
 	require.Equal(t,
-		customRegistry+"/k8s.gcr.io/pause:3.1",
+		customRegistry+"/pause:3.1",
 		pxAPIDaemonSet.Spec.Template.Spec.Containers[0].Image,
 	)
 
@@ -7786,7 +7900,7 @@ func TestCompleteInstallWithCustomRegistryChange(t *testing.T) {
 	err = testutil.Get(k8sClient, pxProxyDaemonSet, component.PxProxyDaemonSetName, api.NamespaceSystem)
 	require.NoError(t, err)
 	require.Equal(t,
-		customRegistry+"/k8s.gcr.io/pause:3.1",
+		customRegistry+"/pause:3.1",
 		pxProxyDaemonSet.Spec.Template.Spec.Containers[0].Image,
 	)
 
@@ -7909,7 +8023,7 @@ func TestCompleteInstallWithCustomRegistryChange(t *testing.T) {
 	err = testutil.Get(k8sClient, pxAPIDaemonSet, component.PxAPIDaemonSetName, cluster.Namespace)
 	require.NoError(t, err)
 	require.Equal(t,
-		customRegistry+"/k8s.gcr.io/pause:3.1",
+		customRegistry+"/pause:3.1",
 		pxAPIDaemonSet.Spec.Template.Spec.Containers[0].Image,
 	)
 
@@ -7917,7 +8031,7 @@ func TestCompleteInstallWithCustomRegistryChange(t *testing.T) {
 	err = testutil.Get(k8sClient, pxProxyDaemonSet, component.PxProxyDaemonSetName, api.NamespaceSystem)
 	require.NoError(t, err)
 	require.Equal(t,
-		customRegistry+"/k8s.gcr.io/pause:3.1",
+		customRegistry+"/pause:3.1",
 		pxProxyDaemonSet.Spec.Template.Spec.Containers[0].Image,
 	)
 
@@ -8038,12 +8152,12 @@ func TestCompleteInstallWithCustomRegistryChange(t *testing.T) {
 	pxAPIDaemonSet = &appsv1.DaemonSet{}
 	err = testutil.Get(k8sClient, pxAPIDaemonSet, component.PxAPIDaemonSetName, cluster.Namespace)
 	require.NoError(t, err)
-	require.Equal(t, "k8s.gcr.io/pause:3.1", pxAPIDaemonSet.Spec.Template.Spec.Containers[0].Image)
+	require.Equal(t, "registry.k8s.io/pause:3.1", pxAPIDaemonSet.Spec.Template.Spec.Containers[0].Image)
 
 	pxProxyDaemonSet = &appsv1.DaemonSet{}
 	err = testutil.Get(k8sClient, pxProxyDaemonSet, component.PxProxyDaemonSetName, api.NamespaceSystem)
 	require.NoError(t, err)
-	require.Equal(t, "k8s.gcr.io/pause:3.1", pxProxyDaemonSet.Spec.Template.Spec.Containers[0].Image)
+	require.Equal(t, "registry.k8s.io/pause:3.1", pxProxyDaemonSet.Spec.Template.Spec.Containers[0].Image)
 
 	pvcDeployment = &appsv1.Deployment{}
 	err = testutil.Get(k8sClient, pvcDeployment, component.PVCDeploymentName, cluster.Namespace)
@@ -8164,7 +8278,7 @@ func TestCompleteInstallWithCustomRegistryChange(t *testing.T) {
 	err = testutil.Get(k8sClient, pxAPIDaemonSet, component.PxAPIDaemonSetName, cluster.Namespace)
 	require.NoError(t, err)
 	require.Equal(t,
-		customRegistry+"/k8s.gcr.io/pause:3.1",
+		customRegistry+"/pause:3.1",
 		pxAPIDaemonSet.Spec.Template.Spec.Containers[0].Image,
 	)
 
@@ -8172,7 +8286,7 @@ func TestCompleteInstallWithCustomRegistryChange(t *testing.T) {
 	err = testutil.Get(k8sClient, pxProxyDaemonSet, component.PxProxyDaemonSetName, api.NamespaceSystem)
 	require.NoError(t, err)
 	require.Equal(t,
-		customRegistry+"/k8s.gcr.io/pause:3.1",
+		customRegistry+"/pause:3.1",
 		pxProxyDaemonSet.Spec.Template.Spec.Containers[0].Image,
 	)
 
@@ -9026,12 +9140,12 @@ func TestCompleteInstallWithCustomRepoRegistryChange(t *testing.T) {
 	pxAPIDaemonSet = &appsv1.DaemonSet{}
 	err = testutil.Get(k8sClient, pxAPIDaemonSet, component.PxAPIDaemonSetName, cluster.Namespace)
 	require.NoError(t, err)
-	require.Equal(t, "k8s.gcr.io/pause:3.1", pxAPIDaemonSet.Spec.Template.Spec.Containers[0].Image)
+	require.Equal(t, "registry.k8s.io/pause:3.1", pxAPIDaemonSet.Spec.Template.Spec.Containers[0].Image)
 
 	pxProxyDaemonSet = &appsv1.DaemonSet{}
 	err = testutil.Get(k8sClient, pxProxyDaemonSet, component.PxProxyDaemonSetName, api.NamespaceSystem)
 	require.NoError(t, err)
-	require.Equal(t, "k8s.gcr.io/pause:3.1", pxProxyDaemonSet.Spec.Template.Spec.Containers[0].Image)
+	require.Equal(t, "registry.k8s.io/pause:3.1", pxProxyDaemonSet.Spec.Template.Spec.Containers[0].Image)
 
 	pvcDeployment = &appsv1.Deployment{}
 	err = testutil.Get(k8sClient, pvcDeployment, component.PVCDeploymentName, cluster.Namespace)
@@ -12796,6 +12910,25 @@ func TestSCC(t *testing.T) {
 	err = testutil.Get(k8sClient, scc, expectedSCC.Name, "")
 	require.NoError(t, err)
 	require.Equal(t, expectedSCC, scc)
+
+	// Update SCC
+	scc.AllowHostNetwork = false
+	err = k8sClient.Update(context.TODO(), scc)
+	require.NoError(t, err)
+	err = driver.PreInstall(cluster)
+	require.NoError(t, err)
+	err = testutil.Get(k8sClient, scc, expectedSCC.Name, "")
+	require.NoError(t, err)
+
+	// Update SCC priority
+	cluster.Annotations[pxutil.AnnotationSCCPriority] = "2"
+	err = k8sClient.Update(context.TODO(), scc)
+	require.NoError(t, err)
+	err = driver.PreInstall(cluster)
+	require.NoError(t, err)
+	err = testutil.Get(k8sClient, scc, expectedSCC.Name, "")
+	require.NoError(t, err)
+	require.Equal(t, *scc.Priority, int32(2))
 }
 
 func TestPodSecurityPoliciesEnabled(t *testing.T) {
@@ -13673,6 +13806,151 @@ func TestTelemetryCCMGoEnableAndDisable(t *testing.T) {
 	require.Empty(t, cluster.Status.DesiredImages.MetricsCollectorProxy)
 	require.NotEmpty(t, cluster.Status.DesiredImages.TelemetryProxy)
 	require.Empty(t, cluster.Status.DesiredImages.LogUploader)
+}
+
+func TestSetTelemetryDefaults(t *testing.T) {
+	coreops.SetInstance(coreops.New(fakek8sclient.NewSimpleClientset()))
+	reregisterComponents()
+	k8sClient := testutil.FakeK8sClient()
+	driver := portworx{}
+	err := driver.Init(k8sClient, runtime.NewScheme(), record.NewFakeRecorder(0))
+	require.NoError(t, err)
+
+	cluster := &corev1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "px-cluster",
+			Namespace: "kube-test",
+		},
+		Spec: corev1.StorageClusterSpec{
+			Image: "portworx/oci-monitor:2.7.0",
+			Monitoring: &corev1.MonitoringSpec{
+				Telemetry: &corev1.TelemetrySpec{
+					Enabled: true,
+					Image:   "purestorage/ccm-go:1.2.3",
+				},
+			},
+		},
+	}
+
+	// TestCase: telemetry should be disabled if PX is lower than 2.8
+	err = driver.SetDefaultsOnStorageCluster(cluster)
+	require.NoError(t, err)
+	require.NotNil(t, cluster.Spec.Monitoring)
+	require.NotNil(t, cluster.Spec.Monitoring.Telemetry)
+	require.False(t, cluster.Spec.Monitoring.Telemetry.Enabled)
+	require.Empty(t, cluster.Spec.Monitoring.Telemetry.Image)
+
+	// TestCase: telemetry should not be enabled by default if CCM Go is not supported
+	cluster.Spec.Image = "portworx/oci-monitor:2.11.0"
+	cluster.Spec.Monitoring = nil
+	err = driver.SetDefaultsOnStorageCluster(cluster)
+	require.NoError(t, err)
+	require.Nil(t, cluster.Spec.Monitoring)
+
+	// TestCase: telemetry should not be disabled if using http proxy on ccm-go
+	cluster.Spec.Image = "portworx/oci-monitor:2.12.0"
+	cluster.Spec.Env = []v1.EnvVar{{
+		Name:  pxutil.EnvKeyPortworxHTTPProxy,
+		Value: "http://host:port",
+	}}
+	cluster.Spec.Monitoring = &corev1.MonitoringSpec{
+		Telemetry: &corev1.TelemetrySpec{
+			Enabled: true,
+		},
+	}
+	err = driver.SetDefaultsOnStorageCluster(cluster)
+	require.NoError(t, err)
+	require.NotNil(t, cluster.Spec.Monitoring)
+	require.NotNil(t, cluster.Spec.Monitoring.Telemetry)
+	require.True(t, cluster.Spec.Monitoring.Telemetry.Enabled)
+
+	// TestCase: telemetry should not be disabled if using http proxy url in https env var on ccm-go
+	cluster.Spec.Env = []v1.EnvVar{{
+		Name:  pxutil.EnvKeyPortworxHTTPSProxy,
+		Value: "http://host:port",
+	}}
+	err = driver.SetDefaultsOnStorageCluster(cluster)
+	require.NoError(t, err)
+	require.NotNil(t, cluster.Spec.Monitoring)
+	require.NotNil(t, cluster.Spec.Monitoring.Telemetry)
+	require.True(t, cluster.Spec.Monitoring.Telemetry.Enabled)
+
+	// TestCase: telemetry should be disabled if using secure proxy on ccm-go
+	cluster.Spec.Env = []v1.EnvVar{{
+		Name:  pxutil.EnvKeyPortworxHTTPSProxy,
+		Value: "test-proxy",
+	}}
+	err = driver.SetDefaultsOnStorageCluster(cluster)
+	require.NoError(t, err)
+	require.NotNil(t, cluster.Spec.Monitoring)
+	require.NotNil(t, cluster.Spec.Monitoring.Telemetry)
+	require.False(t, cluster.Spec.Monitoring.Telemetry.Enabled)
+
+	// TestCase: telemetry should be disabled if using invalid http proxy format
+	cluster.Spec.Monitoring = &corev1.MonitoringSpec{
+		Telemetry: &corev1.TelemetrySpec{
+			Enabled: true,
+		},
+	}
+	cluster.Spec.Env = []v1.EnvVar{{
+		Name:  pxutil.EnvKeyPortworxHTTPProxy,
+		Value: "test-proxy",
+	}}
+	err = driver.SetDefaultsOnStorageCluster(cluster)
+	require.NoError(t, err)
+	require.NotNil(t, cluster.Spec.Monitoring)
+	require.NotNil(t, cluster.Spec.Monitoring.Telemetry)
+	require.False(t, cluster.Spec.Monitoring.Telemetry.Enabled)
+
+	// TestCase: telemetry should not be enabled by default if proxy is configured
+	cluster.Spec.Monitoring = nil
+	cluster.Spec.Env = []v1.EnvVar{{
+		Name:  pxutil.EnvKeyPortworxHTTPProxy,
+		Value: "host:port",
+	}}
+	err = driver.SetDefaultsOnStorageCluster(cluster)
+	require.NoError(t, err)
+	require.Nil(t, cluster.Spec.Monitoring)
+
+	// TestCase: telemetry should not be enabled by default if it's disabled
+	cluster.Spec.Env = nil
+	cluster.Spec.Monitoring = &corev1.MonitoringSpec{
+		Telemetry: &corev1.TelemetrySpec{
+			Enabled: false,
+		},
+	}
+	err = driver.SetDefaultsOnStorageCluster(cluster)
+	require.NoError(t, err)
+	require.NotNil(t, cluster.Spec.Monitoring)
+	require.NotNil(t, cluster.Spec.Monitoring.Telemetry)
+	require.False(t, cluster.Spec.Monitoring.Telemetry.Enabled)
+
+	// TestCase: telemetry should not be enabled by default if uuid is not ready
+	cluster.Spec.Monitoring = nil
+	err = driver.SetDefaultsOnStorageCluster(cluster)
+	require.NoError(t, err)
+	require.Nil(t, cluster.Spec.Monitoring)
+
+	// TestCase: telemetry should not be enabled by default if prod register endpoint is unreachable
+	cluster.Status.ClusterUID = "cluster-uid"
+	setupEtcHosts(t, "127.0.0.1", "register.cloud-support.purestorage.com")
+	defer restoreEtcHosts(t)
+	cluster.Spec.Monitoring = nil
+	err = driver.SetDefaultsOnStorageCluster(cluster)
+	require.NoError(t, err)
+	require.Nil(t, cluster.Spec.Monitoring)
+
+	// TestCase: telemetry should be enabled by default if staging register endpoint is reachable
+	cluster.Spec.Env = nil
+	cluster.Annotations = map[string]string{
+		pxutil.AnnotationTelemetryArcusLocation: "internal",
+	}
+
+	err = driver.SetDefaultsOnStorageCluster(cluster)
+	require.NoError(t, err)
+	require.NotNil(t, cluster.Spec.Monitoring)
+	require.NotNil(t, cluster.Spec.Monitoring.Telemetry)
+	require.True(t, cluster.Spec.Monitoring.Telemetry.Enabled)
 }
 
 func TestTelemetryCCMGoUpgrade(t *testing.T) {
@@ -14976,7 +15254,7 @@ func TestCSISnapController(t *testing.T) {
 			Containers: []v1.Container{
 				{
 					Name:  "snapshot-controller",
-					Image: "k8s.gcr.io/sig-storage/snapshot-controller:v3.0.3",
+					Image: "registry.k8s.io/sig-storage/snapshot-controller:v3.0.3",
 				},
 			},
 		},
@@ -15022,7 +15300,7 @@ func TestCSISnapController(t *testing.T) {
 			Containers: []v1.Container{
 				{
 					Name:  "snapshot-controller",
-					Image: "k8s.gcr.io/sig-storage/snapshot-controller:v3.0.3",
+					Image: "registry.k8s.io/sig-storage/snapshot-controller:v3.0.3",
 				},
 			},
 		},

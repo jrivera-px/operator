@@ -25,6 +25,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 
 	storageapi "github.com/libopenstorage/openstorage/api"
 	"github.com/libopenstorage/operator/drivers/storage/portworx/util"
@@ -146,9 +147,9 @@ func (c *Controller) constructHistory(
 		// Add the unique label if it's not already added to the history
 		// We use history name instead of computing hash, so that we don't
 		// need to worry about hash collision
-		if _, ok := history.Labels[defaultStorageClusterUniqueLabelKey]; !ok {
+		if _, ok := history.Labels[operatorutil.DefaultStorageClusterUniqueLabelKey]; !ok {
 			toUpdate := history.DeepCopy()
-			toUpdate.Labels[defaultStorageClusterUniqueLabelKey] = toUpdate.Name
+			toUpdate.Labels[operatorutil.DefaultStorageClusterUniqueLabelKey] = toUpdate.Name
 			err = c.client.Update(context.TODO(), toUpdate)
 			if err != nil {
 				return nil, nil, err
@@ -253,7 +254,7 @@ func (c *Controller) snapshot(
 	hash := computeHash(&cluster.Spec, cluster.Status.CollisionCount)
 	name := historyName(cluster.Name, hash)
 	historyLabels := c.StorageClusterSelectorLabels(cluster)
-	historyLabels[defaultStorageClusterUniqueLabelKey] = hash
+	historyLabels[operatorutil.DefaultStorageClusterUniqueLabelKey] = hash
 
 	history := &apps.ControllerRevision{
 		ObjectMeta: metav1.ObjectMeta{
@@ -351,12 +352,12 @@ func (c *Controller) dedupCurHistories(
 			return nil, err
 		}
 		for _, pod := range pods {
-			if pod.Labels[defaultStorageClusterUniqueLabelKey] != keepCur.Labels[defaultStorageClusterUniqueLabelKey] {
+			if pod.Labels[operatorutil.DefaultStorageClusterUniqueLabelKey] != keepCur.Labels[operatorutil.DefaultStorageClusterUniqueLabelKey] {
 				toUpdate := pod.DeepCopy()
 				if toUpdate.Labels == nil {
 					toUpdate.Labels = make(map[string]string)
 				}
-				toUpdate.Labels[defaultStorageClusterUniqueLabelKey] = keepCur.Labels[defaultStorageClusterUniqueLabelKey]
+				toUpdate.Labels[operatorutil.DefaultStorageClusterUniqueLabelKey] = keepCur.Labels[operatorutil.DefaultStorageClusterUniqueLabelKey]
 				err = c.client.Update(context.TODO(), toUpdate)
 				if err != nil {
 					return nil, err
@@ -466,7 +467,12 @@ func (c *Controller) getUnavailableNumbers(
 			// for the purposes of update we ensure that the pod is
 			// both available and not terminating
 			if podutil.IsPodReady(pod) && pod.DeletionTimestamp == nil {
-				available = true
+				// Wait for MinReadySeconds after pod is ready.
+				if podutil.IsPodAvailable(pod, cluster.Spec.UpdateStrategy.RollingUpdate.MinReadySeconds, metav1.Now()) {
+					available = true
+				} else {
+					logrus.Infof("Pod %s has not been ready for MinReadySeconds (%d), wait to perform rolling updates", pod.Name, cluster.Spec.UpdateStrategy.RollingUpdate.MinReadySeconds)
+				}
 				break
 			}
 		}
@@ -520,7 +526,7 @@ func (c *Controller) cleanupHistory(
 	liveHashes := make(map[string]bool)
 	for _, pods := range nodesToStoragePods {
 		for _, pod := range pods {
-			if hash := pod.Labels[defaultStorageClusterUniqueLabelKey]; len(hash) > 0 {
+			if hash := pod.Labels[operatorutil.DefaultStorageClusterUniqueLabelKey]; len(hash) > 0 {
 				liveHashes[hash] = true
 			}
 		}
@@ -529,7 +535,7 @@ func (c *Controller) cleanupHistory(
 	// Find all live history with the above hashes
 	liveHistory := make(map[string]bool)
 	for _, history := range old {
-		if hash := history.Labels[defaultStorageClusterUniqueLabelKey]; liveHashes[hash] {
+		if hash := history.Labels[operatorutil.DefaultStorageClusterUniqueLabelKey]; liveHashes[hash] {
 			liveHistory[history.Name] = true
 		}
 	}
@@ -595,7 +601,7 @@ func (c *Controller) syncStoragePod(
 		oldNodeLabels = node.Labels
 	}
 
-	podHash := pod.Labels[defaultStorageClusterUniqueLabelKey]
+	podHash := pod.Labels[operatorutil.DefaultStorageClusterUniqueLabelKey]
 	// If the hash on pod is same as the current cluster's hash and node labels
 	// have not changed then there is no update needed for the pod.
 	if len(hash) > 0 && podHash == hash && reflect.DeepEqual(oldNodeLabels, node.Labels) {
@@ -634,10 +640,14 @@ func (c *Controller) syncStoragePod(
 		// so update the custom annotations here first if necessary, then set the storage cluster hash
 		// to the pod to avoid checking selected fields or set annotations over and over again
 		c.annotateStoragePod(cluster, pod)
-		pod.Labels[defaultStorageClusterUniqueLabelKey] = hash
+		pod.Labels[operatorutil.DefaultStorageClusterUniqueLabelKey] = hash
 		if err := c.client.Update(context.TODO(), pod); err != nil {
 			errMsg := fmt.Sprintf("Unable to update storage pod: %v", err)
-			k8s.WarningEvent(c.recorder, cluster, operatorutil.FailedStoragePodReason, errMsg)
+			if strings.Contains(err.Error(), k8s.UpdateRevisionConflictErr) {
+				logrus.Warnf(errMsg)
+			} else {
+				k8s.WarningEvent(c.recorder, cluster, operatorutil.FailedStoragePodReason, errMsg)
+			}
 		}
 	}
 

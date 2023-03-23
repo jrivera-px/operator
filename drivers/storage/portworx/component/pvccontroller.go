@@ -297,7 +297,7 @@ func (c *pvcController) createDeployment(
 
 	kubeControllerImage := "gcr.io/google_containers/kube-controller-manager-amd64"
 	if k8sutil.IsNewKubernetesRegistry(&c.k8sVersion) {
-		kubeControllerImage = "k8s.gcr.io/kube-controller-manager-amd64"
+		kubeControllerImage = k8sutil.DefaultK8SRegistryPath + "/kube-controller-manager-amd64"
 	}
 	imageName := util.GetImageURN(
 		cluster,
@@ -309,17 +309,8 @@ func (c *pvcController) createDeployment(
 		"--leader-elect=true",
 		"--controllers=persistentvolume-binder,persistentvolume-expander",
 		"--use-service-account-credentials=true",
-	}
-
-	if c.k8sVersion.LessThan(k8sutil.K8sVer1_24) {
-		if pxutil.IsOpenshift(cluster) {
-			command = append(command, "--leader-elect-resource-lock=endpoints")
-		} else {
-			command = append(command, "--leader-elect-resource-lock=configmaps")
-		}
-	} else {
-		command = append(command, "--leader-elect-resource-name=portworx-pvc-controller")
-		command = append(command, fmt.Sprintf("--leader-elect-resource-namespace=%s", cluster.Namespace))
+		"--leader-elect-resource-name=portworx-pvc-controller",
+		fmt.Sprintf("--leader-elect-resource-namespace=%s", cluster.Namespace),
 	}
 
 	if c.k8sVersion.LessThan(k8sutil.K8sVer1_22) {

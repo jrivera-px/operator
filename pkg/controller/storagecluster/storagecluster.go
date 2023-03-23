@@ -40,7 +40,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
@@ -69,20 +68,19 @@ const (
 	// ControllerName is the name of the controller
 	ControllerName = "storagecluster-controller"
 	// ComponentName is the component name of the storage cluster
-	ComponentName                       = "storage"
-	slowStartInitialBatchSize           = 1
-	validateCRDInterval                 = 5 * time.Second
-	validateCRDTimeout                  = 1 * time.Minute
-	deleteFinalizerName                 = constants.OperatorPrefix + "/delete"
-	nodeNameIndex                       = "nodeName"
-	defaultStorageClusterUniqueLabelKey = apps.ControllerRevisionHashLabelKey
-	defaultRevisionHistoryLimit         = 10
-	defaultMaxUnavailablePods           = 1
-	failureDomainZoneKey                = v1.LabelZoneFailureDomainStable
-	crdBasePath                         = "/crds"
-	deprecatedCRDBasePath               = "/crds/deprecated"
-	storageClusterCRDFile               = "core_v1_storagecluster_crd.yaml"
-	minSupportedK8sVersion              = "1.21.0"
+	ComponentName               = "storage"
+	slowStartInitialBatchSize   = 1
+	validateCRDInterval         = 5 * time.Second
+	validateCRDTimeout          = 1 * time.Minute
+	deleteFinalizerName         = constants.OperatorPrefix + "/delete"
+	nodeNameIndex               = "nodeName"
+	defaultRevisionHistoryLimit = 10
+	defaultMaxUnavailablePods   = 1
+	failureDomainZoneKey        = v1.LabelZoneFailureDomainStable
+	crdBasePath                 = "/crds"
+	deprecatedCRDBasePath       = "/crds/deprecated"
+	storageClusterCRDFile       = "core_v1_storagecluster_crd.yaml"
+	minSupportedK8sVersion      = "1.21.0"
 )
 
 var _ reconcile.Reconciler = &Controller{}
@@ -236,10 +234,9 @@ func (c *Controller) Reconcile(_ context.Context, request reconcile.Request) (re
 
 	if err := c.validate(cluster); err != nil {
 		k8s.WarningEvent(c.recorder, cluster, util.FailedValidationReason, err.Error())
-		if updateErr := c.updateLiveStorageClusterState(cluster, corev1.ClusterStateDegraded); updateErr != nil {
+		if updateErr := util.UpdateLiveStorageClusterLifecycle(c.client, cluster, corev1.ClusterStateDegraded); updateErr != nil {
 			logrus.Errorf("Failed to update StorageCluster status. %v", updateErr)
 		}
-
 		return reconcile.Result{}, err
 	}
 
@@ -255,8 +252,14 @@ func (c *Controller) Reconcile(_ context.Context, request reconcile.Request) (re
 	}
 
 	if err := c.syncStorageCluster(cluster); err != nil {
+		// Ignore object revision conflict errors, as StorageCluster can be edited in different places,
+		// the next reconcile loop should be able to resolve the issue
+		if strings.Contains(err.Error(), k8s.UpdateRevisionConflictErr) {
+			logrus.Warnf("failed to sync StorageCluster %s/%s: %v", cluster.Namespace, cluster.Name, err)
+			return reconcile.Result{}, nil
+		}
 		k8s.WarningEvent(c.recorder, cluster, util.FailedSyncReason, err.Error())
-		if updateErr := c.updateLiveStorageClusterState(cluster, corev1.ClusterStateDegraded); updateErr != nil {
+		if updateErr := util.UpdateLiveStorageClusterLifecycle(c.client, cluster, corev1.ClusterStateDegraded); updateErr != nil {
 			logrus.Errorf("Failed to update StorageCluster status. %v", updateErr)
 		}
 		return reconcile.Result{}, err
@@ -299,6 +302,11 @@ func (c *Controller) validate(cluster *corev1.StorageCluster) error {
 	}
 	if err := c.Driver.Validate(); err != nil {
 		return err
+	}
+	if err := pxutil.ValidateTelemetry(cluster); err != nil {
+		// Raise warning only and don't block anything
+		msg := fmt.Sprintf("telemetry will be disabled: %v", err)
+		k8s.WarningEvent(c.recorder, cluster, util.FailedValidationReason, msg)
 	}
 
 	return nil
@@ -458,12 +466,12 @@ func (c *Controller) runPreflightCheck(cluster *corev1.StorageCluster) error {
 	// Update the cluster only if anything has changed
 	if !reflect.DeepEqual(cluster, toUpdate) {
 		toUpdate.DeepCopyInto(cluster)
-		if err := c.client.Update(context.TODO(), cluster); err != nil {
+		if err := k8s.UpdateStorageCluster(c.client, cluster); err != nil {
 			return err
 		}
 
 		cluster.Status = *toUpdate.Status.DeepCopy()
-		if err := c.client.Status().Update(context.TODO(), cluster); err != nil {
+		if err := k8s.UpdateStorageClusterStatus(c.client, cluster); err != nil {
 			return err
 		}
 	}
@@ -590,7 +598,7 @@ func (c *Controller) syncStorageCluster(
 	if cluster.DeletionTimestamp != nil {
 		logrus.Infof("Storage cluster %v/%v has been marked for deletion",
 			cluster.Namespace, cluster.Name)
-		if err := c.updateLiveStorageClusterState(cluster, corev1.ClusterStateUninstall); err != nil {
+		if err := util.UpdateLiveStorageClusterLifecycle(c.client, cluster, corev1.ClusterStateUninstall); err != nil {
 			logrus.Errorf("Failed to update StorageCluster status. %v", err)
 			return err
 		}
@@ -619,7 +627,7 @@ func (c *Controller) syncStorageCluster(
 		return fmt.Errorf("failed to construct revisions of StorageCluster %v/%v: %v",
 			cluster.Namespace, cluster.Name, err)
 	}
-	hash := cur.Labels[defaultStorageClusterUniqueLabelKey]
+	hash := cur.Labels[util.DefaultStorageClusterUniqueLabelKey]
 
 	// TODO: Don't process a storage cluster until all its previous creations and
 	// deletions have been processed.
@@ -643,7 +651,7 @@ func (c *Controller) syncStorageCluster(
 	}
 
 	// Update status of the cluster
-	return c.updateStorageClusterStatus(cluster)
+	return c.updateStorageClusterStatus(cluster, hash)
 }
 
 func (c *Controller) deleteStorageCluster(
@@ -697,6 +705,15 @@ func (c *Controller) deleteStorageCluster(
 		}
 
 		if deleteCondition.Status == corev1.ClusterConditionStatusCompleted {
+			// We should update telemetry cert ownerRef here, telemetry cert is created by PX, and the ownerRef
+			// should be updated by telemetry component. However there is race condition that causes telemetry
+			// component not setting it correct, it happens when uninstallStrategy is changed in StorageCluster
+			// spec then uninstall immediately, as component reconcile takes 30 second to trigger.
+			ownerRef := metav1.NewControllerRef(cluster, pxutil.StorageClusterKind())
+			if err := pxutil.SetTelemetryCertOwnerRef(cluster, ownerRef, c.client); err != nil {
+				return err
+			}
+
 			if err := c.removeMigrationLabels(); err != nil {
 				return fmt.Errorf("failed to remove migration labels from nodes: %v", err)
 			}
@@ -711,7 +728,7 @@ func (c *Controller) deleteStorageCluster(
 
 			newFinalizers := removeDeleteFinalizer(toDelete.Finalizers)
 			toDelete.Finalizers = newFinalizers
-			if err := c.client.Update(context.TODO(), toDelete); err != nil && !errors.IsNotFound(err) {
+			if err := k8s.UpdateStorageCluster(c.client, toDelete); err != nil && !errors.IsNotFound(err) {
 				return err
 			}
 		}
@@ -784,31 +801,12 @@ func (c *Controller) removeMigrationLabels() error {
 
 func (c *Controller) updateStorageClusterStatus(
 	cluster *corev1.StorageCluster,
+	clusterHash string,
 ) error {
 	toUpdate := cluster.DeepCopy()
-	if err := c.Driver.UpdateStorageClusterStatus(toUpdate); err != nil {
+	if err := c.Driver.UpdateStorageClusterStatus(toUpdate, clusterHash); err != nil {
 		k8s.WarningEvent(c.recorder, cluster, util.FailedSyncReason, err.Error())
 	}
-	return k8s.UpdateStorageClusterStatus(c.client, toUpdate)
-}
-
-func (c *Controller) updateLiveStorageClusterState(
-	cluster *corev1.StorageCluster,
-	clusterState corev1.ClusterState,
-) error {
-	toUpdate := &corev1.StorageCluster{}
-	err := c.client.Get(
-		context.TODO(),
-		types.NamespacedName{
-			Name:      cluster.Name,
-			Namespace: cluster.Namespace,
-		},
-		toUpdate,
-	)
-	if err != nil {
-		return err
-	}
-	toUpdate.Status.Phase = string(clusterState)
 	return k8s.UpdateStorageClusterStatus(c.client, toUpdate)
 }
 
@@ -1220,7 +1218,7 @@ func (c *Controller) CreatePodTemplate(
 		}
 	}
 	if len(hash) > 0 {
-		newTemplate.Labels[defaultStorageClusterUniqueLabelKey] = hash
+		newTemplate.Labels[util.DefaultStorageClusterUniqueLabelKey] = hash
 	}
 	return newTemplate, nil
 }
@@ -1290,6 +1288,7 @@ func (c *Controller) setStorageClusterDefaults(cluster *corev1.StorageCluster) e
 	}
 
 	if err := c.Driver.SetDefaultsOnStorageCluster(toUpdate); err != nil {
+		// TODO: investigate update failure
 		return err
 	}
 
@@ -1298,12 +1297,14 @@ func (c *Controller) setStorageClusterDefaults(cluster *corev1.StorageCluster) e
 	// Update the cluster only if anything has changed
 	if !reflect.DeepEqual(cluster, toUpdate) {
 		toUpdate.DeepCopyInto(cluster)
-		if err := c.client.Update(context.TODO(), cluster); err != nil {
+		if err := k8s.UpdateStorageCluster(c.client, cluster); err != nil {
 			return err
 		}
 
+		// NOTE: race condition can happen when updating status right after spec,
+		// revision got from live cluster can become stale, so ignoring the error in syncStorageCluster
 		cluster.Status = *toUpdate.Status.DeepCopy()
-		if err := c.client.Status().Update(context.TODO(), cluster); err != nil {
+		if err := k8s.UpdateStorageClusterStatus(c.client, cluster); err != nil {
 			return err
 		}
 	}
